@@ -10,6 +10,7 @@
 
 import sys
 import os
+import glob
 import arc
 
 def run(filename):
@@ -19,17 +20,19 @@ def run(filename):
         print(filename)
     return 0
 
-# Run with this parameter
+# Three ways to run this:
 # ../data/training/*.json
-# and that gets you all observations with holes in them.
+# ../data/training/d364b489.json ../data/training/dbc1a6ce.json ../data/training/b60334d2.json
+# ../data/training/d364b489.json
 if __name__ == '__main__':
     if len(sys.argv) < 2:
         print(f"usage: {sys.argv[0]} <arc task name>. Stopping.")
         sys.exit(-1)
 
-    import glob
-    for filename in glob.glob(sys.argv[1]):
-        print(f"\nFile: {filename}")
-        run(filename)
-
-    # sys.exit(run(sys.argv[1]))
+    # If this is a filename, then run this filename. If it is a glob
+    # then run all files. If we have multiple filenames on the cli, then
+    # do this for all of them.
+    for args in sys.argv[1:]:
+        for filename in glob.glob(args):
+            run(filename)
+    exit(0)
