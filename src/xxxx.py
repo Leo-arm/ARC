@@ -20,6 +20,7 @@ def run(filename):
         print(filename)
     return 0
 
+# TODO(Leo): This file's filename needs to follow the naming guidelines.
 # Three ways to run this:
 # ../data/training/*.json
 # ../data/training/d364b489.json ../data/training/dbc1a6ce.json ../data/training/b60334d2.json

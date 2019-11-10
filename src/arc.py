@@ -2,7 +2,9 @@
 
 import io
 from util import Util
-
+from collections import defaultdict
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
 import pprint
 
 pp = pprint.PrettyPrinter(indent=4).pprint
@@ -92,7 +94,7 @@ class Grid(object):
     def nof_objects(self):
         freq = defaultdict(int)
         for cell in self.cells():
-            freq[cell[2]] += 1
+            freq[cell.c] += 1
         return len(freq.keys())
 
 
@@ -105,7 +107,6 @@ class Grid(object):
                     break
             else:
                 # Neighbours are not the same as this cell
-                print(f"Hole at {cell}")
                 holes += 1
         return holes
 
@@ -120,6 +121,10 @@ class Observation(object):
 
     def nof_holes(self):
         return self.input.nof_holes()
+
+    def nof_objects(self):
+        return self.input.nof_objects()
+
 
 class Task(object):
 
@@ -145,38 +150,48 @@ class Task(object):
         Apply a number of recognition methods to find out what the salient
         features of this task is.
         """
-
-        return self.nof_holes() >= 3
-
         features = {
             'nof_holes': self.nof_holes,
             'nof_objects': self.nof_objects,
         }
 
-        for feature in features.values():
-            for obs in self._obs:
-                result = feature(obs)
+        # Run each of the features and collect the results for each of the
+        # examples. This results in the dict with as key the name of the
+        # detector and as value a list with one entry per example.
+        res = {}
+        for name, feature in features.items():
+            feature(res)
 
-        """
-        Maybe for each observaation?
-        """
+        print(res)
+        table = [res[k] for k in res.keys()]
+        table = list(map(list, zip(*table)))
+        pp(table)
+
+        pca = PCA(n_components=2)
+        pc = pca.fit_transform(table)
+        pp(pc)
+
+        # Another way to look at this is that we need a set of transformations
+        # such that the difference between the input and the output is 0 for
+        # that attribute. So just throw transformations at it until we have
+        # a vector that is perfectly correlated.
+
+        fig = plt.plot(figsize = (8,8))
+        plt.scatter(pc[0], pc[1])
+        plt.show()
 
 
-    def nof_objects(self, grid):
-        return grid.nof_objects()
-
-    def nof_holes(self):
-        nof_holes = -1
+    def nof_objects(self, res):
+        l = []
         for obs in self._obs:
-            n = obs.nof_holes()
-            if n > 0:
-                print(obs)
-                print(f"Holes: {n}")
-            if nof_holes == -1:
-                nof_holes = n
-            elif nof_holes != n:
-                return False
-        return True
+            l.append(obs.nof_objects())
+        res['nof_objects'] = l
+
+    def nof_holes(self, res):
+        l = []
+        for obs in self._obs:
+            l.append(obs.nof_holes())
+        res['nof_holes'] = l
 
 
 class Arc(object):
