@@ -67,6 +67,7 @@ class Cell(object):
                     if neighbour:
                         yield neighbour
 
+
 class GridShape(set):
     """
     A shape on the grid
@@ -100,6 +101,25 @@ class GridShape(set):
         """
         size = self.size()
         return (size[0] // 2, size[1] // 2)
+
+    def hv_align_to(self, other):
+        """
+        Iterate over the cells that horizontally -or- vertically connect self to
+        # other, excluding the center of self or other.
+        """
+        ac = Cell(None, *self.center(), 0)
+        bc = Cell(None, *other.center(), 0)
+        if ac.x == bc.x:
+            start = ac.y + 1 if ac.y < bc.y else bc.y - 1
+            end  = bc.y - 1 if bc.y > ac.y else ac.y + 1
+            for y in range(start, end):
+                yield(Cell(None, ac.x, y, 0))
+        elif ac.y == bc.y:
+            start = ac.x + 1 if ac.x < bc.x else bc.x - 1
+            end  = bc.x - 1 if bc.x > ac.x else ac.x + 1
+            for x in range(start, end):
+                yield(Cell(None, x, ac.y, 0))
+
 
 class Grid(object):
     # TODO(Leo): change colour output to False before submitting
@@ -346,6 +366,7 @@ class Task(object):
             return [key for key in self.input_feat.keys() if key in self.output_feat]
 
         def is_equal(a, b):
+            """Determine if the 'a' fact is the same as the 'b' fact"""
             def same_type(c, d):
                 return type(c).__name__ == type(d).__name__
 
@@ -367,7 +388,6 @@ class Task(object):
                     break
             else:
                 self.common_feat['same_grid_size'] = self.input_feat['grid_size'][0]
-
 
         # Add the fact that the number of objects is the same in input and output
         match = []
@@ -420,13 +440,63 @@ class Task(object):
                 # They are all the same so pick the first
                 self.common_feat['same_input_shapes'] = self.output_feat['object_shape'][0][0]
 
-        # Add the fact that the input has some same attribute as the output
+        def holes_aligned(self, in_out_feat, key):
+            """Determine if holes in input or output are aligned"""
+            if 'holes' in in_out_feat:
+                # For each observation
+                match = []
+                for obs in in_out_feat['holes']:
+                    align = []
+                    for a, b in combinations(obs, 2):
+                        # Get the one and only cell; they are holes
+                        ac = next(iter(a))
+                        bc = next(iter(b))
+                        if ac.x == bc.x or ac.y == bc.y:
+                            # Store one of them so we have coordinates
+                            if a not in align and b not in align:
+                                align.append(a)
+                    if len(align):
+                        # List of matching holes per observation
+                        match.append(align)
+                if len(match):
+                    # List of list of matching holes, one list per observation
+                    self.common_feat[key] = match
+
+        # Add the fact that holes are horizontally or vertically aligned
+        # in the input and in the output
+        holes_aligned(self, self.input_feat, 'hv_input_holes_aligned')
+        holes_aligned(self, self.output_feat, 'hv_output_holes_aligned')
+
+        # Add the fact that there is a connection between aligned holes in the
+        # output. Should really check that there is no connection in the input
+        # as well.
+        if 'hv_output_holes_aligned' in self.common_feat:
+            bg = None
+            for obs in self.common_feat['hv_output_holes_aligned']:
+                for a, b in combinations(obs, 2):
+                    for c in a.hv_align_to(b):
+                        if bg != None and bg != c.c:
+                            # No colour match, abort
+                            bg = None
+                            break
+                        # bg is None, or it matched
+                        bg = c.c
+                if bg == None:
+                    # Colour did not match, so abort
+                    break
+            else:
+                self.common_feat['hv_output_holes_aligned_bg'] = bg
+
+        # For all facts that are the same in input and output, add the fact
+        # that they are in fact the same
         for attr in common_keys():
             if is_equal(self.input_feat[attr], self.output_feat[attr]):
                 self.common_feat[attr] = self.input_feat[attr]
 
         # TODO(Leo): remove
-        print(self.common_feat)
+        # print(self.common_feat)
+        pp(self.common_feat['hv_output_holes_aligned'])
+        print()
 
     def _find_program(self):
         """
@@ -447,6 +517,13 @@ class Task(object):
 
             program.append(self.Isa.copy_output_shape_to_input_shape_pos)
 
+        if 'hv_input_holes_aligned' in self.common_feat and \
+           'hv_output_holes_aligned' in self.common_feat and \
+           'hv_output_holes_aligned_bg' in self.common_feat:
+
+            program.append(self.Isa.connect_hv_alligned)
+
+
         return program
 
     class Isa(object):
@@ -461,6 +538,14 @@ class Task(object):
                 for input_shape in obs:
                     x, y = input_shape.center()
                     answer.add_shape(x, y, program_data['same_output_shapes'])
+
+        @classmethod
+        def connect_hv_alligned(cls, answer, input_data, program_data):
+            if 'hv_output_holes_aligned' in input_data:
+                for obs in input_data['hv_output_holes_aligned']:
+                    for a, b in combinations(obs, 2):
+                        if c in a.hv_align_to(b):
+                            answer.put(c)
 
     def execute(self, program, input_data, program_data):
         print("Test image")
