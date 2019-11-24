@@ -4,7 +4,7 @@
 import io
 import operator
 from util import Util
-from collections import defaultdict
+from collections import defaultdict, Counter
 from functools import reduce
 from itertools import combinations
 from sklearn.decomposition import PCA
@@ -67,6 +67,24 @@ class Cell(object):
                     if neighbour:
                         yield neighbour
 
+    def hv_align_to(self, other):
+        """
+        Iterate over the cells that horizontally -or- vertically connect self to
+        # other, excluding the center of self and other.
+        """
+        if self.x == other.x:
+            start = self.y + 1 if self.y < other.y else other.y - 1
+            end  = other.y if other.y > self.y else self.y
+            for y in range(start, end):
+                # yield(Cell(None, self.x, y, 0))
+                yield self.g.at(self.x, y)
+        elif self.y == other.y:
+            start = self.x + 1 if self.x < other.x else other.x - 1
+            end  = other.x if other.x > self.x else self.x
+            for x in range(start, end):
+                yield self.g.at(x, self.y)
+                # yield(Cell(None, x, self.y, 0))
+
 
 class GridShape(set):
     """
@@ -79,46 +97,49 @@ class GridShape(set):
         return g.__str__()
 
     def contains(self, other):
-        """Return True if other is entirely contained with self"""
+        """Return True if other is entirely contained with self.
+        As a compromise, allow partial shapes ar the border
+        Made complicate by the fact that shape cell coordinates are absolute"""
+        def normalise(shape):
+            minx, miny, maxx, maxy = self.extent()
+            new_shape = GridShape()
+            for c in self:
+                new_shape.add(Cell(c.g, c.x - minx, c.y - miny, c.c))
+            return new_shape
+
         if isinstance(other, Cell):
             return other in self
-        return (self & other) == other
+        a = normalise(self)
+        b = normalise(other)
+        return (a & b) == b
 
-    def size(self):
-        """
-        Return the size of an object as an x, y tuple
-        """
+    def extent(self):
+        """Return the absolute extent of the shape"""
         first = next(iter(self))
         minx = reduce(lambda v, c: v if v < c.x else c.x, self, first.x)
         maxx = reduce(lambda v, c: v if v > c.x else c.x, self, first.x)
         miny = reduce(lambda v, c: v if v < c.y else c.y, self, first.y)
         maxy = reduce(lambda v, c: v if v > c.y else c.y, self, first.y)
+        return (minx, miny, maxx, maxy)
+
+    def pos(self):
+        """Return the absolute position of the center of the shape on the grid"""
+        minx, miny, maxx, maxy = self.extent()
+        return ((maxx + minx) // 2, (maxy + miny) // 2)
+
+    def size(self):
+        """
+        Return the size of an object as an x, y tuple
+        """
+        minx, miny, maxx, maxy = self.extent()
         return ((maxx - minx + 1), (maxy - miny + 1))
 
     def center(self):
         """
-        Return the center of the shape as an x, y tuple
+        Return the relative center of the shape as an x, y tuple
         """
         size = self.size()
-        return (size[0] // 2, size[1] // 2)
-
-    def hv_align_to(self, other):
-        """
-        Iterate over the cells that horizontally -or- vertically connect self to
-        # other, excluding the center of self or other.
-        """
-        ac = Cell(None, *self.center(), 0)
-        bc = Cell(None, *other.center(), 0)
-        if ac.x == bc.x:
-            start = ac.y + 1 if ac.y < bc.y else bc.y - 1
-            end  = bc.y - 1 if bc.y > ac.y else ac.y + 1
-            for y in range(start, end):
-                yield(Cell(None, ac.x, y, 0))
-        elif ac.y == bc.y:
-            start = ac.x + 1 if ac.x < bc.x else bc.x - 1
-            end  = bc.x - 1 if bc.x > ac.x else ac.x + 1
-            for x in range(start, end):
-                yield(Cell(None, x, ac.y, 0))
+        return ((size[0] + 1) // 2, (size[1] + 1) // 2)
 
 
 class Grid(object):
@@ -176,6 +197,14 @@ class Grid(object):
                 return Cell(self, x, y, self._grid[y][x])
         return None
 
+    def put(self, cell):
+        """
+        Put a cell on the grid, with bounds checking
+        """
+        if cell.x >= 0 and cell.x < len(self._grid[0]) and \
+                cell.y >= 0 and cell.y < len(self._grid):
+            self._grid[cell.y][cell.x] = cell.c
+
     def add_shape(self, x, y, shape):
         """
         Add a shape centered on the x, y coordinates
@@ -185,9 +214,7 @@ class Grid(object):
             # Awkward as the shape cell coordinates have absolute coordinates
             xpos = x + (cell.x - shape_x)
             ypos = y + (cell.y - shape_y)
-            if xpos >= 0 and xpos < len(self._grid[0]) and \
-                ypos >= 0 and ypos < len(self._grid):
-                self._grid[ypos][xpos] = cell.c
+            self.put(Cell(self, xpos, ypos, cell.c))
 
     def cells(self):
         """
@@ -196,6 +223,16 @@ class Grid(object):
         for y, row in enumerate(self._grid):
             for x, c in enumerate(row):
                 yield(Cell(self, x, y, c))
+
+    def background(self):
+        """
+        Return the majority colour of the grid. This is assumed to be the
+        background.
+        """
+        cnt = Counter();
+        for cell in self.cells():
+            cnt[cell.c] += 1
+        return cnt.most_common(1)[0][0]
 
     def segment_connected(self, objs, obj, cell, bg):
         """Segment an object from the background and connect the shape.
@@ -215,10 +252,7 @@ class Grid(object):
         return obj
 
     def nof_objects(self):
-        freq = defaultdict(int)
-        for cell in self.cells():
-            freq[cell.c] += 1
-        return len(freq.keys())
+        return len(self.object_shape())
 
     def holes(self):
         """
@@ -237,16 +271,21 @@ class Grid(object):
                 holes.append(hole)
         return holes
 
+    def dots(self):
+        """
+        Return a list of the dots. A dot is a single cell of one colour that is
+        not the background.
+        """
+        bg = self.background()
+        return [c for c in self.cells() if c.c != bg]
+
     def object_shape(self):
         """
         Find the shape of the objects. It is assumed that
         the most common colour is the background.
         Return a list of objects.
         """
-        freq = defaultdict(int)
-        for cell in self.cells():
-            freq[cell.c] += 1
-        bg = max(freq.items(), key=operator.itemgetter(1))[0]
+        bg = self.background()
         # Now segment the objects out of the background. This fails for
         # connected objects.
         objs = []
@@ -256,8 +295,8 @@ class Grid(object):
             # new object
             objs.append(new_obj)
             obj = self.segment_connected(objs, new_obj, cell, bg)
-            if not len(obj):
-                # Nothing in it so remove it.
+            if len(obj) < 2:
+                # Nothing in it so remove it. Dots don't count
                 del objs[-1]
         # List of detected objects
         return objs
@@ -268,17 +307,36 @@ class Grid(object):
         """
         return (len(self._grid[0]), len(self._grid))
 
+    def dots_aligned(self):
+        align = []
+        for a, b in combinations(self.dots(), 2):
+            # Get the one and only cell; they are dots
+            if a.x == b.x or a.y == b.y:
+                # Store both
+                align.append((a, b))
+        return align
+
+
 class Observation(object):
     def __init__(self, json):
         self.input = Grid.from_json(json['input'])
         self.output = Grid.from_json(json['output'])
+        print(self)
 
     def __str__(self):
         return f"Input\n{str(self.input)}\nOutput:\n{str(self.output)}"
 
+    def bg(self, from_input):
+        fr = self.input if from_input else self.output
+        return fr.background()
+
     def holes(self, from_input):
         fr = self.input if from_input else self.output
         return fr.holes()
+
+    def dots(self, from_input):
+        fr = self.input if from_input else self.output
+        return fr.dots()
 
     def nof_objects(self, from_input):
         fr = self.input if from_input else self.output
@@ -291,6 +349,11 @@ class Observation(object):
     def grid_size(self, from_input):
         fr = self.input if from_input else self.output
         return fr.grid_size()
+
+    def dots_aligned(self, from_input):
+        fr = self.input if from_input else self.output
+        return fr.dots_aligned()
+
 
 class Task(object):
 
@@ -319,13 +382,21 @@ class Task(object):
         return s
 
     def _find_features(self):
-        """Run each of the features and collect the results for each of the
-        examples, for both the inputs and the test cases.
+        """Run each of the feature detectors and collect the results for each
+        of the examples, for both the inputs and the test cases.
+        The detector detects all features that may be detected in input, output
+        and test grids, without relating the features to one-another.
+        The features that are detected should be sufficient to construct the
+        test output from the test input, the "program" and common derived
+        features (i.e. program constant data).
         This results in the dict with as key the name of the
         detector and as value a list with one entry per example.
         """
         features = {
+            'bg'          : self.bg,
             'holes'       : self.holes,
+            'dots'        : self.dots,
+            'dots_aligned': self.dots_aligned,
             'nof_objects' : self.nof_objects,
             'object_shape': self.object_shape,
             'grid_size'   : self.grid_size,
@@ -414,78 +485,105 @@ class Task(object):
                         # Hole matches with shape
                         match.append(output)
                         continue
+                # TODO(Leo): consider len(obs) to match len(match)
                 if len(match):
                     self.common_feat['hole_inside_object'] = match
 
-        # Add the fact that the output shapes are all the same
+        # Add the fact that the output shapes are all the same.
+        # Allow for partial shapes at the borders
         if 'object_shape' in self.output_feat:
             # For each observation
-            for obs in self.output_feat['object_shape']:
-                for a, b in combinations(obs, 2):
+            for pairs in self.output_feat['object_shape']:
+                same = True
+                for a, b in combinations(pairs, 2):
                     if not a.contains(b) or not b.contains(a):
+                        same = False
                         break
+                if not same:
+                    break
             else:
                 # They are all the same so pick the first
                 self.common_feat['same_output_shapes'] = self.output_feat['object_shape'][0][0]
+
+        # Add the fact that the input dots are the same in the output.
+        if 'dots' in self.input_feat and 'dots' in self.output_feat:
+            match = []
+            # For each observation
+            for indots, outdots in zip(self.input_feat['dots'], self.output_feat['dots']):
+                same_dots = []
+                for indot in indots:
+                    if not indot in outdots:
+                        break
+                    same_dots.append(indot)
+                else:
+                    match.append(same_dots)
+            else:
+                # List of matching output dots between input and output
+                # Only add if all input dots matched output dots for all obs
+                if len(match) == len(self.input_feat['dots']):
+                    self.common_feat['dots_same_input_output'] = match
 
         # Add the fact that the input shapes are all the same
         # TODO(Leo): refactor this with the above rule
         if 'object_shape' in self.input_feat:
             # For each observation
-            for obs in self.input_feat['object_shape']:
-                for a, b in combinations(obs, 2):
+            for pairs in self.input_feat['object_shape']:
+                for a, b in combinations(pairs, 2):
                     if not a.contains(b) or not b.contains(a):
                         break
             else:
                 # They are all the same so pick the first
                 self.common_feat['same_input_shapes'] = self.output_feat['object_shape'][0][0]
 
-        def holes_aligned(self, in_out_feat, key):
-            """Determine if holes in input or output are aligned"""
-            if 'holes' in in_out_feat:
-                # For each observation
-                match = []
-                for obs in in_out_feat['holes']:
-                    align = []
-                    for a, b in combinations(obs, 2):
-                        # Get the one and only cell; they are holes
-                        ac = next(iter(a))
-                        bc = next(iter(b))
-                        if ac.x == bc.x or ac.y == bc.y:
-                            # Store one of them so we have coordinates
-                            if a not in align and b not in align:
-                                align.append(a)
-                    if len(align):
-                        # List of matching holes per observation
-                        match.append(align)
-                if len(match):
-                    # List of list of matching holes, one list per observation
-                    self.common_feat[key] = match
-
         # Add the fact that holes are horizontally or vertically aligned
         # in the input and in the output
-        holes_aligned(self, self.input_feat, 'hv_input_holes_aligned')
-        holes_aligned(self, self.output_feat, 'hv_output_holes_aligned')
+        if 'dots_aligned' in self.input_feat:
+            if 'dots_aligned' in self.output_feat:
+                # TODO(Leo): check that all observations have this
+                self.common_feat['dots_aligned'] = self.input_feat['dots_aligned']
 
-        # Add the fact that there is a connection between aligned holes in the
-        # output. Should really check that there is no connection in the input
-        # as well.
-        if 'hv_output_holes_aligned' in self.common_feat:
-            bg = None
-            for obs in self.common_feat['hv_output_holes_aligned']:
-                for a, b in combinations(obs, 2):
-                    for c in a.hv_align_to(b):
-                        if bg != None and bg != c.c:
-                            # No colour match, abort
-                            bg = None
-                            break
-                        # bg is None, or it matched
-                        bg = c.c
-                if bg == None:
-                    # Colour did not match, so abort
+        # Add the fact that there is a connection between aligned dots in the
+        # output, and it is not the background.
+        # We use the input dots but check the output connections
+
+        def find_output_match(ab, output_pairs):
+            """Find a match in the output pairs"""
+            if output_pairs:
+                for pair in output_pairs:
+                    if ab == pair:
+                        return pair
+            return (None, None)
+
+        if 'dots_aligned' in self.common_feat:
+            match = []
+            for i, (pairs, output_pairs) in enumerate(zip(self.common_feat['dots_aligned'], self.output_feat['dots_aligned'])):
+                # For all pairs in an observation
+                bg = self.output_feat['bg'][i]
+                fg = None
+                pair_found = None
+                for a, b in pairs:
+                    ac, bc = find_output_match((a, b), output_pairs)
+                    if ac != None and bc != None:
+                        for c in ac.hv_align_to(bc):
+                            # Several cases make us fail:
+                            # - we found the first cell's foreground and the next
+                            #   cell does not match
+                            # - We found the background
+                            if (fg != None and c.c != fg) or c.c == bg:
+                                # Not the same colour, abort
+                                fg = None
+                                break
+                            # fg is None, or it matched
+                            fg = c.c
+                        else:
+                            pair_found = fg
+                match.append(pair_found)
+
+            for fg in match:
+                if not fg:
                     break
             else:
-                self.common_feat['hv_output_holes_aligned_bg'] = bg
+                self.common_feat['hv_output_dots_aligned_bg'] = fg
 
         # For all facts that are the same in input and output, add the fact
         # that they are in fact the same
@@ -493,36 +591,31 @@ class Task(object):
             if is_equal(self.input_feat[attr], self.output_feat[attr]):
                 self.common_feat[attr] = self.input_feat[attr]
 
-        # TODO(Leo): remove
-        # print(self.common_feat)
-        pp(self.common_feat['hv_output_holes_aligned'])
-        print()
-
     def _find_program(self):
         """
         Given common attributes, find an algorithm to go from input to output
         """
-        program = []
+        program = [self.Isa.create_grid]
         if 'same_output_shapes' in self.common_feat and \
            'same_input_shapes' in self.common_feat and \
             'same_nof_objects' in self.common_feat:
             # This should be broken down into smaller steps, e.g.
             # 1. take shape,
-            # 2. for each input shape location
-            # 3.     copy shape to equivalent location.
+            # 2. for each target location (where target locations are
+            #                       determined by feature analysis)
+            # 3.   copy shape to location.
 
 
             # should have the shape attached to same_output_shapes
             # this should be modeled like the other features earlier on.
-
             program.append(self.Isa.copy_output_shape_to_input_shape_pos)
 
-        if 'hv_input_holes_aligned' in self.common_feat and \
-           'hv_output_holes_aligned' in self.common_feat and \
-           'hv_output_holes_aligned_bg' in self.common_feat:
-
+        if 'dots_aligned' in self.test_feat and \
+           'hv_output_dots_aligned_bg' in self.common_feat:
             program.append(self.Isa.connect_hv_alligned)
 
+        if 'dots_same_input_output' in self.common_feat:
+            program.append(self.Isa.copy_dots)
 
         return program
 
@@ -532,30 +625,48 @@ class Task(object):
         an input image.
         """
         @classmethod
+        def create_grid(cls, answer, input_data, program_data):
+            x, y = input_data['grid_size'][0]
+            return Grid.from_size(x, y, 0, True)
+
+        @classmethod
         def copy_output_shape_to_input_shape_pos(self, answer, input_data, program_data):
-            for obs in input_data['holes']:
-                # TODO(Leo): assuming one test observation
-                for input_shape in obs:
-                    x, y = input_shape.center()
-                    answer.add_shape(x, y, program_data['same_output_shapes'])
+            for input_shapes in input_data['holes']:
+                for input_shape in input_shapes:
+                    cx, cy = input_shape.pos()
+                    answer.add_shape(cx, cy, program_data['same_output_shapes'])
+            return answer
+
+        @classmethod
+        def copy_dots(self, answer, input_data, program_data):
+            for dots in input_data['dots']:
+                # Multiple grids, but for tests really only one
+                for dot in dots:
+                    answer.put(dot)
+            return answer
 
         @classmethod
         def connect_hv_alligned(cls, answer, input_data, program_data):
-            if 'hv_output_holes_aligned' in input_data:
-                for obs in input_data['hv_output_holes_aligned']:
-                    for a, b in combinations(obs, 2):
-                        if c in a.hv_align_to(b):
-                            answer.put(c)
+            if 'hv_output_dots_aligned_bg' in program_data:
+                bg = program_data['hv_output_dots_aligned_bg']
+                for pairs in input_data['dots_aligned']:
+                    for a, b in pairs:
+                        for c in a.hv_align_to(b):
+                            # TODO(Leo): foreground
+                            answer.put(Cell(answer, c.x, c.y, 8))
+            return answer
 
     def execute(self, program, input_data, program_data):
         print("Test image")
         print(repr(self._test))
 
-        x, y = program_data['grid_size'][0]
-        answer = Grid.from_size(x, y, 0, True)
+        answer = None
         for instruction in program:
-                instruction(answer, input_data, program_data)
-        print("------------\n")
+                answer = instruction(answer, input_data, program_data)
+                if answer == None:
+                    print("Seg fault")
+                    return
+
         print(answer)
 
     def solve(self):
@@ -563,12 +674,9 @@ class Task(object):
         Apply a number of recognition methods to find out what the salient
         features of this task is.
         """
-        # TODO(Leo): remove print statement
-        print(self)
 
+        # Find elementary features such as holes, shapes etc.
         self._find_features()
-
-        # self._pca(res)
 
         # Now we have basic information of the inputs and the test cases.
         # Now add more information by adding patterns. For example, if the
@@ -600,6 +708,15 @@ class Task(object):
             l.append(obs.nof_objects(from_input))
         res['nof_objects'] = l
 
+    def bg(self, res, source, from_input):
+        """
+        Determine the background (most common colour)
+        """
+        l = []
+        for obs in source:
+            l.append(obs.bg(from_input))
+        res['bg'] = l
+
     def holes(self, res, source, from_input):
         """
         Count the number of 'holes'
@@ -609,6 +726,16 @@ class Task(object):
         for obs in source:
             l.append(obs.holes(from_input))
         res['holes'] = l
+
+    def dots(self, res, source, from_input):
+        """
+        Count the number of 'dots'. A dot is a single cell of one colour
+        Add a list with an entry per observation
+        """
+        l = []
+        for obs in source:
+            l.append(obs.dots(from_input))
+        res['dots'] = l
 
     def object_shape(self, res, source, from_input):
         """
@@ -629,6 +756,15 @@ class Task(object):
         for obs in source:
             l.append(obs.grid_size(from_input))
         res['grid_size'] = l
+
+    def dots_aligned(self, res, source, from_input):
+        """
+        Determine if the dots, if any, are aligned
+        """
+        l = []
+        for obs in source:
+            l.append(obs.dots_aligned(from_input))
+        res['dots_aligned'] = l
 
 
 class Arc(object):
