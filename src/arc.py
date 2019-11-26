@@ -1,9 +1,11 @@
 # Main class for the ARC solver
+# Student name(s): Leo Blonk
+# Student ID(s): 19240143
 # Command line: /data/training/dbc1a6ce.json ../data/training/b60334d2.json
 
 import io
+import json
 import operator
-from util import Util
 from collections import defaultdict, Counter
 from functools import reduce
 from itertools import combinations
@@ -851,7 +853,15 @@ class Task(object):
 class Arc(object):
 
     def __init__(self, filename):
-        self._task = Task(Util.load(filename))
+        self._task = Task(self.load(filename))
+
+    def load(self, filename):
+        """
+        Load an ARC Json file, convert to an array and return.
+        """
+        with open(filename) as fp:
+            data = json.load(fp)
+        return data
 
     def solve(self):
         return self._task.solve()
