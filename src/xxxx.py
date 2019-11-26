@@ -26,6 +26,9 @@ def run(filename):
 # ../data/training/d364b489.json ../data/training/dbc1a6ce.json ../data/training/b60334d2.json
 # ../data/training/d364b489.json
 if __name__ == '__main__':
+    import doctest
+    doctest.testmod()
+
     if len(sys.argv) < 2:
         print(f"usage: {sys.argv[0]} <arc task name>. Stopping.")
         sys.exit(-1)

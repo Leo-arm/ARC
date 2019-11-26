@@ -38,7 +38,9 @@ class Cell(object):
         return self._grid
 
     def __eq__(self, other):
-        return self.x == other.x and self.y == other.y and self.c == other.c
+        if other:
+            return self.x == other.x and self.y == other.y and self.c == other.c
+        return False
 
     def __ne__(self, other):
         return not self.__eq__(other)
@@ -67,6 +69,19 @@ class Cell(object):
                     if neighbour:
                         yield neighbour
 
+    def close_neighbours(self):
+        """
+        Iterate over the four neighbours of this cell, i.e. -1,0, +1,0
+        0,-1 and 0,+1. At the edge of the grid we may have fewer than four
+        neighbours.
+        """
+        for xx in [-1, 1]:
+            for yy in [-1, 1]:
+                neighbour = self.g.at(self.x + xx, self.y + yy)
+                if neighbour:
+                    yield neighbour
+
+
     def hv_align_to(self, other):
         """
         Iterate over the cells that horizontally -or- vertically connect self to
@@ -92,25 +107,29 @@ class GridShape(set):
     """
 
     def __repr__(self):
-        size = self.size()
-        g = Grid.from_cells(size[0], size[1], 0, self, True)
-        return g.__str__()
+        if len(self):
+            size = self.size()
+            g = Grid.from_cells(size[0], size[1], 0, self, True)
+            return g.__str__()
+        return "GridShape(<empty>)"
+
+    def normalise(self):
+        """Adjust coordinates to be relative"""
+        minx, miny, maxx, maxy = self.extent()
+        new_shape = GridShape()
+        for c in self:
+            new_shape.add(Cell(c.g, c.x - minx, c.y - miny, c.c))
+        return new_shape
 
     def contains(self, other):
         """Return True if other is entirely contained with self.
         As a compromise, allow partial shapes ar the border
         Made complicate by the fact that shape cell coordinates are absolute"""
-        def normalise(shape):
-            minx, miny, maxx, maxy = self.extent()
-            new_shape = GridShape()
-            for c in self:
-                new_shape.add(Cell(c.g, c.x - minx, c.y - miny, c.c))
-            return new_shape
 
         if isinstance(other, Cell):
             return other in self
-        a = normalise(self)
-        b = normalise(other)
+        a = self.normalise()
+        b = self.normalise()
         return (a & b) == b
 
     def extent(self):
@@ -139,7 +158,17 @@ class GridShape(set):
         Return the relative center of the shape as an x, y tuple
         """
         size = self.size()
-        return ((size[0] + 1) // 2, (size[1] + 1) // 2)
+        return (size[0] // 2, size[1] // 2)
+
+    def on_edge(self, grid):
+        """Answer if this object might be on an edge of the grid"""
+        x, y = grid.grid_size()
+        for cell in self:
+            if cell.x <= 0 or cell.y <= 0:
+                return True
+            if cell.x >= x - 1 or cell.y >= y - 1:
+                return True
+        return False
 
 
 class Grid(object):
@@ -168,6 +197,7 @@ class Grid(object):
         assert x_size > 0
         assert y_size > 0
         g = Grid.from_size(x_size, y_size, bg, colour)
+        shape = shape.normalise()
         g.add_shape((x_size + 1) // 2, (y_size + 1) // 2, shape)
         return g
 
@@ -209,11 +239,12 @@ class Grid(object):
         """
         Add a shape centered on the x, y coordinates
         """
-        shape_x, shape_y = shape.center()
-        for cell in shape:
+        norm_shape = shape.normalise()
+        adj_x, adj_y = norm_shape.center()
+        for cell in norm_shape:
             # Awkward as the shape cell coordinates have absolute coordinates
-            xpos = x + (cell.x - shape_x)
-            ypos = y + (cell.y - shape_y)
+            xpos = x + cell.x - adj_x
+            ypos = y + cell.y - adj_y
             self.put(Cell(self, xpos, ypos, cell.c))
 
     def cells(self):
@@ -234,6 +265,38 @@ class Grid(object):
             cnt[cell.c] += 1
         return cnt.most_common(1)[0][0]
 
+    # def segment_connected(self, objs, obj, cell, bg):
+    #     """Segment an object from the background and connect the shape.
+    #     Rather inefficient but works all the same"""
+    #
+    #     def accept(cell):
+    #         """Determine if this cell is not already in some object or the
+    #         wrong background colour"""
+    #         for obj in objs:
+    #             if cell in obj:
+    #                 return False
+    #         return cell.c != bg
+    #
+    #     def segment(objs, obj, cell, bg):
+    #         if accept(cell):
+    #             obj.add(cell)
+    #             for neighbour in cell.close_neighbours():
+    #                 segment(objs, obj, neighbour, bg)
+    #         return obj
+    #
+    #     # We might start at a hole, so check around
+    #     for neighbour in cell.close_neighbours():
+    #         if accept(neighbour):
+    #             obj.add(neighbour)
+    #             segment(objs, obj, neighbour, bg)
+    #
+    #     # obj = segment(objs, obj, cell, bg)
+    #     # TODO(Leo): remove?
+    #     # Remove the parts of the shape that are only connected by the tip
+    #     # of one corner
+    #     # Start again at the first cell. Add close neighbours,
+    #     return obj
+
     def segment_connected(self, objs, obj, cell, bg):
         """Segment an object from the background and connect the shape.
         Rather inefficient but works all the same"""
@@ -247,7 +310,7 @@ class Grid(object):
 
         if accept(cell):
             obj.add(cell)
-            for neighbour in cell.neighbours():
+            for neighbour in cell.close_neighbours():
                 self.segment_connected(objs, obj, neighbour, bg)
         return obj
 
@@ -298,6 +361,13 @@ class Grid(object):
             if len(obj) < 2:
                 # Nothing in it so remove it. Dots don't count
                 del objs[-1]
+            # TODO(Leo): remove
+            # if len(obj) > 1:
+            #     print(f"----------{cell.x},{cell.y})")
+            #     print(self)
+            #     print(obj)
+            #     print('----------')
+
         # List of detected objects
         return objs
 
@@ -344,7 +414,17 @@ class Observation(object):
 
     def object_shape(self, from_input):
         fr = self.input if from_input else self.output
-        return fr.object_shape()
+        shapes = fr.object_shape()
+        # Fix up objects that appear to be cut off by edges
+        centre_shapes = [shape for shape in shapes if not shape.on_edge(fr)]
+        if len(shapes) and len(centre_shapes):
+            for a, b in combinations(centre_shapes, 2):
+                if not (a.contains(b) and b.contains(a)):
+                    break
+            else:
+                # They are all the same. Assume the edge shapes are also the same
+                shapes = [centre_shapes[0] for i in range(len(shapes))]
+        return shapes
 
     def grid_size(self, from_input):
         fr = self.input if from_input else self.output
@@ -598,7 +678,8 @@ class Task(object):
         program = [self.Isa.create_grid]
         if 'same_output_shapes' in self.common_feat and \
            'same_input_shapes' in self.common_feat and \
-            'same_nof_objects' in self.common_feat:
+            'same_nof_objects' in self.common_feat and \
+            'hv_output_dots_aligned_bg' not in self.common_feat:
             # This should be broken down into smaller steps, e.g.
             # 1. take shape,
             # 2. for each target location (where target locations are
