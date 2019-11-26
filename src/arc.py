@@ -77,11 +77,10 @@ class Cell(object):
         0,-1 and 0,+1. At the edge of the grid we may have fewer than four
         neighbours.
         """
-        for xx in [-1, 1]:
-            for yy in [-1, 1]:
-                neighbour = self.g.at(self.x + xx, self.y + yy)
-                if neighbour:
-                    yield neighbour
+        for xx, yy in zip([-1, 1, 0, 0], [0, 0, -1, 1]):
+            neighbour = self.g.at(self.x + xx, self.y + yy)
+            if neighbour:
+                yield neighbour
 
 
     def hv_align_to(self, other):
@@ -93,14 +92,12 @@ class Cell(object):
             start = self.y + 1 if self.y < other.y else other.y - 1
             end  = other.y if other.y > self.y else self.y
             for y in range(start, end):
-                # yield(Cell(None, self.x, y, 0))
                 yield self.g.at(self.x, y)
         elif self.y == other.y:
             start = self.x + 1 if self.x < other.x else other.x - 1
             end  = other.x if other.x > self.x else self.x
             for x in range(start, end):
                 yield self.g.at(x, self.y)
-                # yield(Cell(None, x, self.y, 0))
 
 
 class GridShape(set):
@@ -267,48 +264,16 @@ class Grid(object):
             cnt[cell.c] += 1
         return cnt.most_common(1)[0][0]
 
-    # def segment_connected(self, objs, obj, cell, bg):
-    #     """Segment an object from the background and connect the shape.
-    #     Rather inefficient but works all the same"""
-    #
-    #     def accept(cell):
-    #         """Determine if this cell is not already in some object or the
-    #         wrong background colour"""
-    #         for obj in objs:
-    #             if cell in obj:
-    #                 return False
-    #         return cell.c != bg
-    #
-    #     def segment(objs, obj, cell, bg):
-    #         if accept(cell):
-    #             obj.add(cell)
-    #             for neighbour in cell.close_neighbours():
-    #                 segment(objs, obj, neighbour, bg)
-    #         return obj
-    #
-    #     # We might start at a hole, so check around
-    #     for neighbour in cell.close_neighbours():
-    #         if accept(neighbour):
-    #             obj.add(neighbour)
-    #             segment(objs, obj, neighbour, bg)
-    #
-    #     # obj = segment(objs, obj, cell, bg)
-    #     # TODO(Leo): remove?
-    #     # Remove the parts of the shape that are only connected by the tip
-    #     # of one corner
-    #     # Start again at the first cell. Add close neighbours,
-    #     return obj
-
     def segment_connected(self, objs, obj, cell, bg):
         """Segment an object from the background and connect the shape.
         Rather inefficient but works all the same"""
-        def accept(cell):
+        def accept(c):
             """Determine if this cell is not already in some object or the
             wrong background colour"""
             for obj in objs:
-                if cell in obj:
+                if c in obj:
                     return False
-            return cell.c != bg
+            return c.c != bg
 
         if accept(cell):
             obj.add(cell)
@@ -363,13 +328,6 @@ class Grid(object):
             if len(obj) < 2:
                 # Nothing in it so remove it. Dots don't count
                 del objs[-1]
-            # TODO(Leo): remove
-            # if len(obj) > 1:
-            #     print(f"----------{cell.x},{cell.y})")
-            #     print(self)
-            #     print(obj)
-            #     print('----------')
-
         # List of detected objects
         return objs
 
@@ -741,7 +699,7 @@ class Task(object):
 
     def execute(self, program, input_data, program_data):
         print("Test image")
-        print(repr(self._test))
+        print(str(self._test))
 
         answer = None
         for instruction in program:
