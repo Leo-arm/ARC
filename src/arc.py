@@ -1,23 +1,30 @@
 # Main class for the ARC solver
 # Student name(s): Leo Blonk
 # Student ID(s): 19240143
+# Source code available on github account Leo-arm.
 # Command line: /data/training/dbc1a6ce.json ../data/training/b60334d2.json
 
 import io
+import sys
+import glob
 import json
 import operator
 from collections import defaultdict, Counter
 from functools import reduce
 from itertools import combinations
-from sklearn.decomposition import PCA
-import matplotlib.pyplot as plt
 import pprint
 
+# Debug in full colour if True, False for release as per requirements
+# The printout is much clearer when this is switched on. This requires an
+# ANSI compatible terminal.
+g_fancy_output = False
+
+# Global pretty printer for debug
 pp = pprint.PrettyPrinter(indent=4).pprint
 
 class Cell(object):
     """
-    Immutable cell object representing a grid cell and its colour
+    Immutable cell object representing a grid cell and its colour.
     """
     def __init__(self, g, x, y, c):
         self._grid = g
@@ -25,18 +32,22 @@ class Cell(object):
 
     @property
     def x(self):
+        """Shorthand for x coordinate"""
         return self._cell[0]
 
     @property
     def y(self):
+        """Shorthand for y coordinate"""
         return self._cell[1]
 
     @property
     def c(self):
+        """Shorthand for colour"""
         return self._cell[2]
 
     @property
     def g(self):
+        """The grid that this cell belongs to"""
         return self._grid
 
     def __eq__(self, other):
@@ -53,7 +64,7 @@ class Cell(object):
         return self.x < other.x
 
     def __hash__(self):
-        """Assuming small grids < 256 in height or width here"""
+        """Assuming small grids < 256 in height or width"""
         return self.x << 16 + self.y << 8 + self.c
 
     def __str__(self):
@@ -102,18 +113,19 @@ class Cell(object):
 
 class GridShape(set):
     """
-    A shape on the grid
+    A shape on a grid. Shapes are stored as a set of cells
     """
 
     def __repr__(self):
         if len(self):
             size = self.size()
-            g = Grid.from_cells(size[0], size[1], 0, self, True)
+            g = Grid.from_cells(size[0], size[1], 0, self, g_fancy_output)
             return g.__str__()
         return "GridShape(<empty>)"
 
     def normalise(self):
-        """Adjust coordinates to be relative"""
+        """Adjust coordinates to be relative. That is to say, the first row
+        and column of member cells are at 0."""
         minx, miny, maxx, maxy = self.extent()
         new_shape = GridShape()
         for c in self:
@@ -122,8 +134,8 @@ class GridShape(set):
 
     def contains(self, other):
         """Return True if other is entirely contained with self.
-        As a compromise, allow partial shapes ar the border
-        Made complicate by the fact that shape cell coordinates are absolute"""
+        Made complicate by the fact that shape cell coordinates are absolute,
+        that is abolute coordinates on the grid."""
 
         if isinstance(other, Cell):
             return other in self
@@ -171,24 +183,34 @@ class GridShape(set):
 
 
 class Grid(object):
+    """
+    A grid of cells.
+    """
+
     # TODO(Leo): change colour output to False before submitting
-    def __init__(self, grid, colour=True):
-        # Change whatever comes in into a 2d array
+    def __init__(self, grid, colour=False):
+        # Change whatever comes in, into a 2d array
         self._grid = [[x if x else 0 for x in y] for y in grid]
         # Debug in full colour :-)
         self.colour = self.ansi if colour else self.nocolour
 
     @classmethod
     def from_json(cls, grid, colour=True):
+        """
+        Create a grid from a json specification
+        """
         return cls(grid, colour)
 
     @classmethod
-    def from_size(cls, x_size, y_size, bg, colour=True):
+    def from_size(cls, x_size, y_size, bg, colour=False):
+        """
+        Create a grid of a specified size
+        """
         g = [[bg for x in range(x_size)] for y in range(y_size)]
         return cls(g, colour)
 
     @classmethod
-    def from_cells(cls, x_size, y_size, bg, shape, colour=True):
+    def from_cells(cls, x_size, y_size, bg, shape, colour=False):
         """
         Create a grid of a certain size and add the shape to it.
         Mainly for debug.
@@ -202,18 +224,27 @@ class Grid(object):
 
     def __str__(self):
         sio = io.StringIO()
-        print(" ", ''.join([f" {str(i % 10)} " for i in range(len(self._grid[0]))]), file=sio)
+        if g_fancy_output:
+            print(" ", ''.join([f" {str(i % 10)} " for i in range(len(self._grid[0]))]), file=sio)
         for i, row in enumerate(self._grid):
-            # TODO(Leo): put the space back in before submitting
-            print(i % 10, ''.join([self.colour(s) for s in row]), file=sio)
+            # Use a space if not printing in colour, else no space. Makes it
+            # easy on the eye for debug
+            if g_fancy_output:
+                sp = ''
+                num = i % 10
+            else:
+                sp = ' '
+                num = ""
+            print(num , sp.join([self.colour(s) for s in row]), file=sio)
         return sio.getvalue()
 
     def nocolour(self, i):
+        """Return a plain string for a cell"""
         return str(i)
 
     def ansi(self, i):
         """
-        Print the grid in colour for easy debugging
+        Print the cells in colour for easy debugging
         """
         return f"\033[1;30;{40+i}m {str(i)} \033[0m"
 
@@ -238,10 +269,10 @@ class Grid(object):
         """
         Add a shape centered on the x, y coordinates
         """
+        # Awkward as the shape cell coordinates have absolute coordinates
         norm_shape = shape.normalise()
         adj_x, adj_y = norm_shape.center()
         for cell in norm_shape:
-            # Awkward as the shape cell coordinates have absolute coordinates
             xpos = x + cell.x - adj_x
             ypos = y + cell.y - adj_y
             self.put(Cell(self, xpos, ypos, cell.c))
@@ -265,8 +296,10 @@ class Grid(object):
         return cnt.most_common(1)[0][0]
 
     def segment_connected(self, objs, obj, cell, bg):
-        """Segment an object from the background and connect the shape.
-        Rather inefficient but works all the same"""
+        """
+        Segment an object from the background and connect the shape.
+        Rather inefficient but works all the same.
+        """
         def accept(c):
             """Determine if this cell is not already in some object or the
             wrong background colour"""
@@ -282,13 +315,11 @@ class Grid(object):
         return obj
 
     def nof_objects(self):
+        """Return the number of objects"""
         return len(self.object_shape())
 
     def holes(self):
-        """
-        Return a list of the holes
-        """
-        # TODO(Leo): larger holes
+        """Return a list of the holes"""
         holes = []
         for cell in self.cells():
             for neighbour in cell.neighbours():
@@ -338,6 +369,7 @@ class Grid(object):
         return (len(self._grid[0]), len(self._grid))
 
     def dots_aligned(self):
+        """Return a list of dots that are aligned vertically or horizontally"""
         align = []
         for a, b in combinations(self.dots(), 2):
             # Get the one and only cell; they are dots
@@ -348,31 +380,47 @@ class Grid(object):
 
 
 class Observation(object):
+    """
+    An observation is a training input grid and an output grid
+    """
     def __init__(self, json):
-        self.input = Grid.from_json(json['input'])
-        self.output = Grid.from_json(json['output'])
-        print(self)
+        self.input = Grid.from_json(json['input'], g_fancy_output)
+        self.output = Grid.from_json(json['output'], g_fancy_output)
 
     def __str__(self):
-        return f"Input\n{str(self.input)}\nOutput:\n{str(self.output)}"
+        """Return a string representing both the input and the output"""
+        return f"{self.input_as_str()}\n{self.output_as_str()}"
+
+    def input_as_str(self):
+        """Return string representation of input grid only"""
+        return str(self.input)
+
+    def output_as_str(self):
+        """Return string representation of output grid only"""
+        return str(self.output)
 
     def bg(self, from_input):
+        """Return the background for input or output grid"""
         fr = self.input if from_input else self.output
         return fr.background()
 
     def holes(self, from_input):
+        """Return the holes for input or output grid"""
         fr = self.input if from_input else self.output
         return fr.holes()
 
     def dots(self, from_input):
+        """Return the dots for input or output grid"""
         fr = self.input if from_input else self.output
         return fr.dots()
 
     def nof_objects(self, from_input):
+        """Return the number of objects for input or output grid"""
         fr = self.input if from_input else self.output
         return fr.nof_objects()
 
     def object_shape(self, from_input):
+        """Return the object shapes for input or output grid"""
         fr = self.input if from_input else self.output
         shapes = fr.object_shape()
         # Fix up objects that appear to be cut off by edges
@@ -387,10 +435,12 @@ class Observation(object):
         return shapes
 
     def grid_size(self, from_input):
+        """Return the grid size for input or output grid"""
         fr = self.input if from_input else self.output
         return fr.grid_size()
 
     def dots_aligned(self, from_input):
+        """Return the aligned dots for input or output grid"""
         fr = self.input if from_input else self.output
         return fr.dots_aligned()
 
@@ -414,12 +464,17 @@ class Task(object):
 
     def __str__(self):
         s = "Observations\n"
-        for obs in self._obs:
-            s += str(obs)
+        for ob in self._obs:
+            s += str(ob)
         s += "Tests\n"
         for test in self._test:
             s += str(test)
         return s
+
+    def print_training_outputs(self):
+        """Print the training inputs as per requirements"""
+        for ob in self._obs:
+            print(ob.output_as_str())
 
     def _find_features(self):
         """Run each of the feature detectors and collect the results for each
@@ -441,6 +496,7 @@ class Task(object):
             'object_shape': self.object_shape,
             'grid_size'   : self.grid_size,
         }
+
         def collect_features(f, source, from_input):
             """Collect features from inputs or outputs,
             sourced from observations or test grids"""
@@ -449,9 +505,11 @@ class Task(object):
 
         self.input_feat = {}
         self.output_feat = {}
-        self.test_feat = {}
         collect_features(self.input_feat, self._obs, True)
         collect_features(self.output_feat, self._obs, False)
+
+        # Separately collect the features from the test example
+        self.test_feat = {}
         collect_features(self.test_feat, self._test, True)
 
     def _add_patterns(self):
@@ -460,6 +518,8 @@ class Task(object):
         information for each of the input and the output.
         E.g. if there are one, then two, then three objects
         in the inputs, see if it makes sense to add a case for four."""
+
+        # No real need for patterns in these three samples.
         pass
 
     def _find_common_patterns(self):
@@ -470,7 +530,11 @@ class Task(object):
 
         # The input_feat, output_feat are both a dictionary with as key and
         # attribute. The value is a list, one for each observation, with either
-        # a number (e.g. number of objects) or a list of objects in the grid.
+        # a number (e.g. number of objects) or a list of objects in the grid
+        # (e.g. shapes)
+
+        # This should be refactored into a small language that would make it
+        # much easier to add similar functionality.
 
         def common_keys():
             """Return the common keys (attributes) between inputs and outputs"""
@@ -483,6 +547,8 @@ class Task(object):
 
             if same_type(a, b):
                 if isinstance(a, list):
+                    # Can't compare lists in a meaningful way, so compare
+                    # the elements ourselves
                     if len(a) == len(b):
                         for d, e in zip(a, b):
                             if not is_equal(d, e):
@@ -525,7 +591,6 @@ class Task(object):
                         # Hole matches with shape
                         match.append(output)
                         continue
-                # TODO(Leo): consider len(obs) to match len(match)
                 if len(match):
                     self.common_feat['hole_inside_object'] = match
 
@@ -564,7 +629,6 @@ class Task(object):
                     self.common_feat['dots_same_input_output'] = match
 
         # Add the fact that the input shapes are all the same
-        # TODO(Leo): refactor this with the above rule
         if 'object_shape' in self.input_feat:
             # For each observation
             for pairs in self.input_feat['object_shape']:
@@ -579,7 +643,6 @@ class Task(object):
         # in the input and in the output
         if 'dots_aligned' in self.input_feat:
             if 'dots_aligned' in self.output_feat:
-                # TODO(Leo): check that all observations have this
                 self.common_feat['dots_aligned'] = self.input_feat['dots_aligned']
 
         # Add the fact that there is a connection between aligned dots in the
@@ -640,12 +703,12 @@ class Task(object):
            'same_input_shapes' in self.common_feat and \
             'same_nof_objects' in self.common_feat and \
             'hv_output_dots_aligned_bg' not in self.common_feat:
+
             # This should be broken down into smaller steps, e.g.
             # 1. take shape,
             # 2. for each target location (where target locations are
             #                       determined by feature analysis)
             # 3.   copy shape to location.
-
 
             # should have the shape attached to same_output_shapes
             # this should be modeled like the other features earlier on.
@@ -668,7 +731,7 @@ class Task(object):
         @classmethod
         def create_grid(cls, answer, input_data, program_data):
             x, y = input_data['grid_size'][0]
-            return Grid.from_size(x, y, 0, True)
+            return Grid.from_size(x, y, 0, g_fancy_output)
 
         @classmethod
         def copy_output_shape_to_input_shape_pos(self, answer, input_data, program_data):
@@ -693,22 +756,25 @@ class Task(object):
                 for pairs in input_data['dots_aligned']:
                     for a, b in pairs:
                         for c in a.hv_align_to(b):
-                            # TODO(Leo): foreground
                             answer.put(Cell(answer, c.x, c.y, 8))
             return answer
 
     def execute(self, program, input_data, program_data):
-        print("Test image")
-        print(str(self._test))
+        """Execute the program on a grid."""
+
+        # Print the test sample
+        print(self._test[0].input_as_str())
 
         answer = None
         for instruction in program:
                 answer = instruction(answer, input_data, program_data)
                 if answer == None:
                     print("Seg fault")
-                    return
+                    return 255
 
+        # Print the result
         print(answer)
+        return 0
 
     def solve(self):
         """
@@ -720,24 +786,31 @@ class Task(object):
         self._find_features()
 
         # Now we have basic information of the inputs and the test cases.
-        # Now add more information by adding patterns. For example, if the
-        # inputs each have one more hole in them, infer that the test case
-        # might have one more again.
+        # Add more information by adding patterns. For example, if the input
+        # has a number of shapes, and the output always has one more, infer that
+        # a shape must be added.
         self._add_patterns()
 
         # Compare the inputs and the test cases to see what patterns are
         # common. Throw out the ones that are not to reduce the search space.
+        # For example, if the inputs all have dots, and the output all have
+        # shapes, infer that dots correspond to shapes.
         self._find_common_patterns()
 
         # Search for a set of transformations that map the inputs to the
-        # outputs. Store these as a set of instructions to apply to the test.
+        # outputs. Store these as a set of instructions to apply to the test
+        # grid.
         self._program = self._find_program()
 
-        print(self._program)
+        # Execute the program on the test example. The features in the test grid
+        # are already collected so apply the program, taking the features in
+        # the test grid and the common features as input data.
+        return self.execute(self._program, self.test_feat, self.common_feat)
 
-        # test = self._find_features(from_test)
-
-        self.execute(self._program, self.test_feat, self.common_feat)
+    # The idea with the functions below is that they can be modified easily
+    # to allow more facts to be added based on their specific findings. This
+    # turns out to be unnecessary for the samples that were chosen so they
+    # could be refactored out. There is duplication, not very DRY.
 
     def nof_objects(self, res, source, from_input):
         """
@@ -821,5 +894,33 @@ class Arc(object):
             data = json.load(fp)
         return data
 
+    def print_training_outputs(self):
+        self._task.print_training_outputs()
+
     def solve(self):
+        """Solve the puzzle and store the resulting program."""
         return self._task.solve()
+
+def solve(filename):
+    """
+    Run a sample, do the analysis and store a program to apply to a test case
+    """
+    arc = Arc(filename)
+    arc.print_training_outputs()
+    return arc.solve()
+
+if __name__ == '__main__':
+    import doctest
+    doctest.testmod()
+
+    if len(sys.argv) < 2:
+        print(f"usage: {sys.argv[0]} <arc task name>. Stopping.")
+        sys.exit(-1)
+
+    # If this is a filename, then run this filename. If it is a glob
+    # then run all files. If we have multiple filenames then run all of them.
+    for args in sys.argv[1:]:
+        for filename in glob.glob(args):
+            solve(filename)
+    exit(0)
+
